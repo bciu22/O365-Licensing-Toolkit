@@ -145,13 +145,14 @@ $mailBody = "$cn" + " $Now " + "`r`n`r`n"
 
 #Log all parameters
 $LogLine = @"
-DisabledPlans:  $DisabledPlans 
-StudentOU: $StudentOU
-UsageLocation: $UsageLocation
-FacultyLicense:  $FacultyLicense
-StudentLicense: $StudentLicense
-Commit: $Commit
-EmailLevel: $EmailLevel
+UsageLocation: $UsageLocation `r`n
+StudentLicense: $StudentLicense `r`n
+StudentDisabledPlans:  $($StudentDisabledPlans.DisabledServicePlans -join ',') `r`n
+StudentOU: $StudentOU `r`n
+FacultyLicense:  $FacultyLicense `r`n
+FacultyDisabledPlans:  $($FacultyDisabledPlans.DisabledServicePlans -join ',') `r`n
+Commit: $Commit `r`n
+EmailLevel: $EmailLevel `r`n
 "@
     
 Write-EventLog -LogName "Application" -Source $LogName -EntryType Information -EventID 100 -Message $LogLine
@@ -300,7 +301,7 @@ Else
 }
 
 #Get the Events from the Error Log
-$Events = Get-EventLog -LogName "Application" -Source $LogName -After $ExecutionStartTime
+$Events = Get-EventLog -LogName "Application" -Source $LogName -After $ExecutionStartTime.AddSeconds(-30)
 #Count the errors
 $ErrorCount =  $Events | ?{$_.EntryType -eq "Error" }  | Measure-Object | Select-Object -ExpandProperty Count
 
