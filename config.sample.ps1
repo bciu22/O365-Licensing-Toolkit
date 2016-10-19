@@ -1,6 +1,6 @@
 <#
   .VERSION 
-    1.0.0
+    1.0.1
 #>
 $UserName='o365admin@somedomain.org'
 $Password='somepassword'

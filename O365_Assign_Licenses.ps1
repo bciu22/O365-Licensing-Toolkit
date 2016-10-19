@@ -24,7 +24,7 @@
     Authors: Charles Crossan, Dan Lezoche
   
   .VERSION 
-    1.0.0
+    1.0.1
 
 #>
 [CmdletBinding()]
