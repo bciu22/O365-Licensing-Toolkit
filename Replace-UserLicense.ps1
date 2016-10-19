@@ -21,7 +21,9 @@
   
   .NOTES
     Authors: Charles Crossan
-
+  
+  .VERSION 
+    1.0.0
 #>
 [CmdletBinding()]
 Param(

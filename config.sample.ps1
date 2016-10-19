@@ -1,3 +1,7 @@
+<#
+  .VERSION 
+    1.0.0
+#>
 $UserName='o365admin@somedomain.org'
 $Password='somepassword'
 $StudentOU = "OU=Students,DC=SomeDomain,DC=org"

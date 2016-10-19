@@ -22,6 +22,9 @@
   
   .NOTES
     Authors: Charles Crossan, Dan Lezoche
+  
+  .VERSION 
+    1.0.0
 
 #>
 [CmdletBinding()]
