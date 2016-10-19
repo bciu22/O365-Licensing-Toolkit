@@ -11,6 +11,12 @@
   .PARAMETER EmailLevel
     Specify the circumstances under which this script will send email messages.  On "Error" by default, so email will only be sent if the script encounters an error.  "Verbose" will always send an email upon completion of a run.  "None" will never send an email.
     
+  .PARAMETER UpdateAllLicenses
+    If set to true, then update the "DisabledPlans" for all O365 users.  Otherwise, only apply licenses to unlicensed users.
+  
+  .PARAMETER UserLimit
+    If set to 0, operate on all users.  Else, limit O365 users to this value.
+  
   .LINK
     https://support.office.com/en-us/article/Assign-or-unassign-licenses-for-Office-365-for-business-997596b5-4173-4627-b915-36abac6786dc
   
@@ -23,9 +29,14 @@ Param(
   [Parameter()]
   [Switch]$Commit=$False,
   [Parameter()]
+  [Switch]$UpdateAllLicenses=$False,
+  [Parameter()]
   [ValidateSet('Error','Verbose','None')]
-  $EmailLevel="Error"
+  $EmailLevel="Error",
+  [Parameter()]
+  $UserLimit=0
 )
+$ExecutionStartTime = Get-Date
 $LogName = "O365 License Assignment Script"
 #Setup Logging
 if(![System.Diagnostics.EventLog]::SourceExists($LogName))
@@ -42,14 +53,84 @@ catch
   Write-EventLog -LogName "Application" -Source $LogName -EntryType Error -EventID 126 -Message "Error loading config file.  Stopping execution.  Please ensure that config.ps1 is present in the same directory as the script, and that it is valid."
   Break
 }
+
+Function Set-O365License
+{
+  <#
+    .DESCRIPTION
+      This function will SET the license for an O365 User.   It is a wrapper function for the Set-MsolUserLicense function that addresses 
+      some weaknesses with the default function such as altering licenses on existing accounts.
+
+  #>
+  param(
+    $MSOLUserAccount,
+    $License,
+    $LicenseOptions,
+    $Commit
+  )
+ 
+  Write-EventLog -LogName "Application" -Source $LogName -EntryType Information -EventID 113 -Message "Processing license: $License for $($MSOLUserAccount.UserPrincipalName)"
+  Try
+  {
+    ##### Here, we need to see what licenses the user already has, and deal with the delta
+    if($MSOLUserAccount.isLicensed)
+    {
+      #Since there are multiple license SKUs, we must determine if the user actually has the desired license on their account.
+      $OperableLicense = $MSOLUserAccount.Licenses | ?{$_.AccountSkuID -eq $License}
+      if ($OperableLicense.count -eq 1 )
+      {
+        If($Commit)
+        {  
+          Write-EventLog -LogName "Application" -Source $LogName -EntryType Information -EventID 119 -Message "User $($MSOLUserAccount.UserPrincipalName) has the $License assigned.  Setting DisabledPlans to: $($LicenseOptions.DisabledServicePlans -join ',')  "
+          $MSOLUserAccount | Set-MsolUserLicense -LicenseOptions $LicenseOptions -ErrorAction "Stop"
+        }
+        else
+        {
+          Write-EventLog -LogName "Application" -Source $LogName -EntryType Information -EventID 129 -Message "WhatIf: User $($MSOLUserAccount.UserPrincipalName) has the $License assigned.  Setting DisabledPlans to: $($LicenseOptions.DisabledServicePlans -join ',')  "
+        }
+       
+      }
+      else 
+      {
+        # The user IS LICENSED in some capacity, but not with the desired license AccountSkuID.  Instead of klobbering the existing license, let's generate a warning in the event log.
+        $UserAssignedLicenses = $($MSOLUserAccount.Licenses | Select-Object -ExpandProperty AccountSkuID) -join ','
+        Write-EventLog -LogName "Application" -Source $LogName -EntryType Warning -EventID 118 -Message @"
+User $($MSOLUserAccount.UserPrincipalName) is licensed, but does not have the $License assigned.
+Currently assigned licenses are: $UserAssignedLicenses.  
+Unable to update license options
+"@
+      }
+    }
+    else 
+    {
+      If($Commit)
+      {  
+        Write-EventLog -LogName "Application" -Source $LogName -EntryType Information -EventID 120 -Message "User $($MSOLUserAccount.UserPrincipalName) was not previously licensed.  Applying license: $License."
+        $MSOLUserAccount | Set-MsolUserLicense  -AddLicenses $License -LicenseOptions $LicenseOptions -ErrorAction "Stop"
+      }
+      else
+      {
+        Write-EventLog -LogName "Application" -Source $LogName -EntryType Information -EventID 130 -Message "WhatIf: User $($MSOLUserAccount.UserPrincipalName) was not previously licensed.  Applying license: $License."
+      }
+      #User account was not licensed.  Add the supplied license to the account
+     
+    }
+  }
+  catch
+  {
+    Write-EventLog -LogName "Application" -Source $LogName -EntryType Error -EventID 114 -Message "Assign License Failed $($_ | out-string)"
+  }   
+}
+
 #Script Defaults
 #create emtpy arrays for staff/students
 $Faculty = @()
 $Students = @()
+$ProblemAccounts = @()
 
 #Configure services to be applied
-$FacultyPlanService = New-MsolLicenseOptions -AccountSkuId $FacultyLicense -DisabledPlans $DisabledPlans
-$StudentPlanService = New-MsolLicenseOptions -AccountSkuId $StudentLicense -DisabledPlans $DisabledPlans
+$FacultyPlanService = New-MsolLicenseOptions -AccountSkuId $FacultyLicense -DisabledPlans $FacultyDisabledPlans
+$StudentPlanService = New-MsolLicenseOptions -AccountSkuId $StudentLicense -DisabledPlans $StudentDisabledPlans
 
 
 
@@ -105,10 +186,18 @@ catch
   Write-EventLog -LogName "Application" -Source $LogName -EntryType Error -EventID 125 -Message "Error connecting to MSOL Service. $($_ | out-string)"
 }
 Write-EventLog -LogName "Application" -Source $LogName -EntryType Information -EventID 103 -Message "Searching for all unlicensed accounts"
-#Discover all unlicensed accounts
-$Users = Get-MSOLUser -All 
+#Discover all unlicensed accounts up to the user limit parameter
+if($UserLimit -eq 0)
+{
+  $Users = Get-MSOLUser -All 
+}
+else {
+   $Users = Get-MSOLUser -MaxResults $UserLimit
+}
+
 $Unlicensed = $Users | Where-Object{$_.IsLicensed -ne $True}
 Write-EventLog -LogName "Application" -Source $LogName -EntryType Information -EventID 104 -Message "Unlicensed accounts found: $($Unlicensed.Count)"
+Write-EventLog -LogName "Application" -Source $LogName -EntryType Information -EventID 127 -Message "Total accounts found: $($Users.Count)"
 
 #Normalize Student OU
 If(!$StudentOU.StartsWith("*"))
@@ -118,22 +207,42 @@ If(!$StudentOU.StartsWith("*"))
 
 Write-EventLog -LogName "Application" -Source $LogName -EntryType Information -EventID 105 -Message "Analyzing accounts for Student/Facility licensing"
 #Determine students/faculty based on UPN and AD OU
-ForEach($User in $Unlicensed)
+if ($UpdateAllLicenses)
+{
+  #If the UpdateAllLicenses flag was set, then we should update the license for the entire found set of users
+  $UsersToProcess = $Users
+}
+else {
+  #If the UpdateAllLicenses flag was not set, then we should only set the license for unlicensed users
+  $UsersToProcess = $Unlicensed
+}
+ForEach($User in $UsersToProcess)
 {
   #Get the AD Object based on UPN, which MSonline 
   $x = Get-ADUser -Filter {UserPrincipalName -eq $User.UserPrincipalName}
   #Determine if the account lives in a student OU, otherwise it's staff
   If($x.DistinguishedName -ilike $StudentOU)
   {
-    $Students += $x.UserPrincipalName
+    $Students += $User
   }
   Else
   {
-    $Faculty += $x.UserPrincipalName
+    if ($x)  # If the local AD object exists, and it's not a student then assume a faculty
+    {
+      $Faculty += $User
+    }
+    else  #If the local AD Object doesn't exist, then this is a problem user.
+    {
+      $ProblemAccounts += $User
+    }
   }
 }
-Write-EventLog -LogName "Application" -Source $LogName -EntryType Information -EventID 106 -Message "Unlicensed Students: $($Students.Count)"
-Write-EventLog -LogName "Application" -Source $LogName -EntryType Information -EventID 107 -Message "Unlicensed Facility: $($Faculty.Count)"
+Write-EventLog -LogName "Application" -Source $LogName -EntryType Information -EventID 106 -Message "Students: $($Students.Count)"
+Write-EventLog -LogName "Application" -Source $LogName -EntryType Information -EventID 107 -Message "Faculty: $($Faculty.Count)"
+if ($ProblemAccounts.count -gt 0)
+{
+  Write-EventLog -LogName "Application" -Source $LogName -EntryType Warning -EventID 128 -Message "Problem Accounts ($($ProblemAccounts.Count)): `r`n$($ProblemAccounts -join "`r`n")"
+}
 
 #Resolve UsageLocation if incorrect/unassigned
 $NonUSUsageLocation = $Users | Where-Object{$_.UsageLocation -ne "US"}
@@ -164,22 +273,7 @@ If ($Students.count -gt 0)
   ForEach($student in $Students)
   {
     #Apply licensing
-    If($Commit)
-    {
-      Write-EventLog -LogName "Application" -Source $LogName -EntryType Information -EventID 113 -Message "Assigning license: $StudentLicense to $student"
-      Try
-      {
-        Set-MsolUserLicense -UserPrincipalName $student -AddLicenses $StudentLicense -LicenseOptions $StudentPlanService -ErrorAction "Stop"
-      }
-      Catch
-      {
-        Write-EventLog -LogName "Application" -Source $LogName -EntryType Error -EventID 114 -Message "Assign License Failed $($_ | out-string)"
-      }
-    }
-    Else
-    {
-      Write-EventLog -LogName "Application" -Source $LogName -EntryType Information -EventID 115 -Message "WhatIf: Assigning license: $StudentLicense to $student"
-    }   
+    Set-O365License -MSOLUserAccount $student -License $StudentLicense -LicenseOptions $StudentPlanService -Commit $Commit
   }
 }
 Else
@@ -194,22 +288,7 @@ If ($Faculty.count -gt 0)
   ForEach($staff in $Faculty)
   {
     #Apply licensing
-    If($Commit)
-    {
-      Write-EventLog -LogName "Application" -Source $LogName -EntryType Information -EventID 118 -Message "Assigning license: $FacultyLicense to $staff"
-      Try
-      {
-        Set-MsolUserLicense -UserPrincipalName $staff -AddLicenses $FacultyLicense -LicenseOptions $FacultyPlanService -ErrorAction "Stop"
-      }
-      Catch
-      {
-        Write-EventLog -LogName "Application" -Source $LogName -EntryType Error -EventID 119 -Message "Assign License Failed $($_ | out-string)"
-      }
-    }
-    Else
-    {
-      Write-EventLog -LogName "Application" -Source $LogName -EntryType Information -EventID 120 -Message"WhatIf: Assigning license: $FacultyLicense to $staff"
-    }   
+    Set-O365License -MSOLUserAccount $staff -License $FacultyLicense -LicenseOptions $FacultyPlanService -Commit $Commit
   }
 }
 Else
@@ -218,7 +297,7 @@ Else
 }
 
 #Get the Events from the Error Log
-$Events = Get-EventLog -LogName "Application" -Source $LogName -After $(Get-Date -Hour 0 -Minute 0 -Second 0).AddDays(-1)
+$Events = Get-EventLog -LogName "Application" -Source $LogName -After $ExecutionStartTime
 #Count the errors
 $ErrorCount =  $Events | ?{$_.EntryType -eq "Error" }  | Measure-Object | Select-Object -ExpandProperty Count
 
@@ -249,7 +328,6 @@ else
 
 if($sendMail)  # If sendMail flag is set, then generate the message, and send it
 {
-  $Events = Get-EventLog -LogName "Application" -Source $LogName -After $(Get-Date -Hour 0 -Minute 0 -Second 0).AddDays(-1)
   $mailBody += $Events | Select-Object -Property TimeGenerated, EventID, EntryType, Source, Message | ConvertTo-HTML -Head $mailHead|  Out-String
   Send-MailMessage -To $smtpTo -From $smtpFrom -Subject $mailSubject -BodyAsHtml -Body $mailBody -SmtpServer $smtpServer
 }
