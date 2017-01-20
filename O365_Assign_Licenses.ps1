@@ -132,11 +132,8 @@ $Students = @()
 $ProblemAccounts = @()
 
 #Configure services to be applied
-$FacultyPlanService = New-MsolLicenseOptions -AccountSkuId $FacultyLicense -DisabledPlans $FacultyDisabledPlans
 $StudentPlanService = New-MsolLicenseOptions -AccountSkuId $StudentLicense -DisabledPlans $StudentDisabledPlans
-
-
-
+$FacultyPlanService = New-MsolLicenseOptions -AccountSkuId $FacultyLicense -DisabledPlans $FacultyDisabledPlans
 
 #Setup Email Destination for Reporting
 $Now = Get-Date
@@ -147,10 +144,10 @@ $mailBody = "$cn" + " $Now " + "`r`n`r`n"
 $LogLine = @"
 UsageLocation: $UsageLocation `r`n
 StudentLicense: $StudentLicense `r`n
-StudentDisabledPlans:  $($StudentDisabledPlans.DisabledServicePlans -join ',') `r`n
+StudentDisabledPlans:  $($StudentPlanService.DisabledServicePlans -join ',') `r`n
 StudentOU: $StudentOU `r`n
 FacultyLicense:  $FacultyLicense `r`n
-FacultyDisabledPlans:  $($FacultyDisabledPlans.DisabledServicePlans -join ',') `r`n
+FacultyDisabledPlans:  $($FacultyPlanService.DisabledServicePlans -join ',') `r`n
 Commit: $Commit `r`n
 EmailLevel: $EmailLevel `r`n
 "@
